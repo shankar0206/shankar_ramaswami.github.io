@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Positional Toy Analysis</title>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<style>
+body { max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+h1, h2, h3 { line-height: 1.25; }
+</style>
+</head>
+<body>
+<p>The following issues exist both during training and inference for our toy positional embedding design.</p>
+
+<p>Let \(x_i = e_i + p_i\) and \(p_i = i\mathbf{1}\). Let \(q_i = Q x_i\) and \(k_j = K x_j\).</p>
+
+<p>The logit is given by</p>
+$$
+\mathrm{logit}_{ij}
+= (Q e_i)^{\top} K e_j
++ j \cdot (Q e_i)^{\top} K\mathbf{1}
++ i \cdot (Q\mathbf{1})^{\top} K e_j
++ i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}
+\quad\text{where } \mathbf{1} \text{ is the constant vector of ones.}
+$$
+
+<p>The first term in the logit measures the content similarity between tokens occurring at \(i\) and \(j\) without taking position into account. The rest of the terms are influenced by the token positions \(i, j\).</p>
+
+<p>Let us assume that the query index \(i\) is fixed.</p>
+
+<p><strong>Case i) Q1≈0 and K1≈0</strong></p>
+
+$$
+\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j.
+$$
+
+<p>The logit in this case is solely influenced by the content similarity and the positional information is almost completely discarded leading to position-agnostic similarity scores.</p>
+
+<p><strong>Case ii) Q1≈0 and K1 is not suppressed</strong></p>
+
+$$
+\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j \;+\; j \cdot (Q e_i)^{\top} K\mathbf{1}.
+$$
+
+<p>We can see that \(\mathrm{logit}_{ij}\) is approximately linear in \(j\) with the slope being \((Q e_i)^{\top} K\mathbf{1}\). We can also note that \((Q e_i)^{\top} K e_j\) changes as the key token index \(j\) changes. This does not stop the linear drift in terms of \(j\) and moreover this is purely the position-agnostic content score that cannot adjust for the same token occurring at different token indices.</p>
+
+<p>If \(((Q e_i)^{\top} K\mathbf{1}) > 0\), the logits of the key tokens that occur towards the end will likely be higher than the ones that occur at the beginning.<br>
+If \(((Q e_i)^{\top} K\mathbf{1}) < 0\), the logits of the key tokens that occur towards the end will likely be lower than the ones that occur at the beginning.<br>
+In both cases the probability distribution (softmax scores) becomes skewed towards either the tokens occurring at the start or at the end.</p>
+
+<p>The skew becomes much more likely when the total change in the j-term across j, \(|(Q e_i)^{\top} K\mathbf{1}| \cdot (\max(j) - \min(j))\) is greater than the range of content score across j, \(\max_j (Q e_i)^{\top} K e_j - \min_j (Q e_i)^{\top} K e_j\).</p>
+
+<p><strong>Case iii) K1≈0 and Q1 is not suppressed</strong></p>
+
+$$
+\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j \;+\; i \cdot (Q\mathbf{1})^{\top} K e_j.
+$$
+
+<p>For a fixed query index \(i\), the second term varies with key index \(j\) through \(e_j\) but does not create a linear drift in \(j\) as in previous case. However as \(i\) increases, the term \(i \cdot (Q\mathbf{1})^{\top} K e_j\) can dominate the logit across \(j\). This means the content similarity is more likely to be diminished when \(i\) gets larger.</p>
+
+<p><strong>Case iv) Neither Q1≈0 nor K1≈0</strong></p>
+
+$$
+\mathrm{logit}_{ij}
+= (Q e_i)^{\top} K e_j
++ j \cdot (Q e_i)^{\top} K\mathbf{1}
++ i \cdot (Q\mathbf{1})^{\top} K e_j
++ i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}.
+$$
+
+<p>For a fixed query token position \(i\), as the key token index \(j\) increases the contribution of \(j \cdot (Q e_i)^{\top} K\mathbf{1} + i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\) to the logit changes, where the direction depends on the sign of \((Q e_i)^{\top} K\mathbf{1} + i \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\).</p>
+
+<p>At the same time the contribution of \(i \cdot (Q\mathbf{1})^{\top} K e_j\) to the logit changes with key token index \(j\). This does not alleviate the linear drift issue as the content vector \(e_j\) changes based on the token's content and not its position. There is no mechanism through which \(e_j\) can systematically counteract the linear drift.</p>
+
+<p>This leads to the same kind of skewed probability distribution as in Case ii). The effect is much more pronounced when both \(i\) and \(j\) increase, where the quadratic term \(i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\) (provided \((Q\mathbf{1})^{\top} K\mathbf{1}\) is not zero) can dominate the rest of the terms.</p>
+
+<p>Thus positional effects are more likely to outweigh the semantics when the sequence gets longer. Also this design struggles to extrapolate during inference to sequences that are longer than the sequences seen typically during training. The flavor of the argument is similar to the above with the bottom line being that this design allows positional information to dominate the content similarity.</p>
+</body>
+</html>
