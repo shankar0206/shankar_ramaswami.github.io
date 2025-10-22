@@ -1,81 +1,127 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Positional Toy Analysis</title>
-<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-<style>
-body { max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-h1, h2, h3 { line-height: 1.25; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Toy Positional Embedding Design, Sinusoidal PEs, and RoPE — Structured Draft</title>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    :root { --fg: #111; --muted: #555; --rule: #e7e7e9; --bg: #fff; }
+    html, body { background: var(--bg); color: var(--fg); }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+           line-height: 1.6; margin: 2.5rem auto; max-width: 940px; padding: 0 1.125rem; }
+    h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 1rem; }
+    h2 { margin-top: 2.1rem; padding-top: .6rem; border-top: 1px solid var(--rule); font-size: 1.35rem; }
+    h3 { margin-top: 1.2rem; font-size: 1.05rem; }
+    p  { margin: .9rem 0; }
+    .eq { margin: .6rem 0 1rem 0; }
+    .note { color: var(--muted); font-size: .95rem; }
+  </style>
 </head>
 <body>
-<p>The following issues exist both during training and inference for our toy positional embedding design.</p>
+  <h1>Toy Positional Embedding Design, Sinusoidal PEs, and RoPE — Structured Draft</h1>
 
-<p>Let \(x_i = e_i + p_i\) and \(p_i = i\mathbf{1}\). Let \(q_i = Q x_i\) and \(k_j = K x_j\).</p>
+  <h2>Motivation</h2>
+  <p>A sentence is an ordered sequence of symbols <strong>whose order crucially determines meaning</strong>.</p>
+  <p><strong>Example:</strong> “She has a hot red pepper” vs “She has a red hot pepper.” The first describes temperature and color; the second describes spiciness. A small permutation of adjectives flips the semantics.</p>
+  <p>To build rich context, a model must know where each symbol sits with respect to the others and have a notion of distance—whether two tokens are adjacent or a thousand words apart. Interactions are often local (e.g., nouns and the adjectives that modify them). Correctly attributing an adjective to its noun relies on relative positions.</p>
+  <p>We therefore need a mechanism that lets the model access order information for the symbols (tokens). Because these models operate on numbers, a natural approach is to represent order numerically.</p>
 
-<p>The logit is given by</p>
-$$
-\mathrm{logit}_{ij}
-= (Q e_i)^{\top} K e_j
-+ j \cdot (Q e_i)^{\top} K\mathbf{1}
-+ i \cdot (Q\mathbf{1})^{\top} K e_j
-+ i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}
-\quad\text{where } \mathbf{1} \text{ is the constant vector of ones.}
-$$
+  <h2>Assumptions</h2>
+  <p>\(d\) is the embedding dimension; \(d\) is even; we use \((m,n)\) for (query, key) indices throughout; \(\mathbf{1}\) is the constant vector of ones;
+  \(e_m\) is the token embedding and \(p_m\) is the positional embedding; \(x_m = e_m + p_m\);
+  \(q_m = Q x_m\) and \(k_n = K x_n\) are the query and key vectors respectively; \(Q, K \in \mathbb{R}^{d\times d}\) (single head for simplicity).</p>
 
-<p>The first term in the logit measures the content similarity between tokens occurring at \(i\) and \(j\) without taking position into account. The rest of the terms are influenced by the token positions \(i, j\).</p>
+  <h2>Toy Design and Logit Expansion</h2>
+  <p>Let us analyze the most naive implementation of this idea—our toy positional embedding design—where each position is given its absolute position badge \(p_m = m\mathbf{1}\)—and see why it fails. The following issues apply to both training and inference for this toy positional embedding design.</p>
+  <p>Using the setup above and setting \(p_m = m\mathbf{1}\), the attention logit is</p>
+  <div class="eq">\[\text{logit}_{mn} = \big((Q e_m)^{\top} K e_n\big) + n \cdot \big((Q e_m)^{\top} K\mathbf{1}\big) + m \cdot \big((Q\mathbf{1})^{\top} K e_n\big) + m \cdot n \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big).\]</div>
+  <p>The first term measures content similarity between tokens at \(m\) and \(n\) without position. The remaining terms are influenced by token positions \(m, n\).</p>
+  <p>Let the query index \(m\) be fixed unless otherwise noted. We analyze four regimes given by whether \(Q\mathbf{1}\) or \(K\mathbf{1}\) are negligible (≈ \(\mathbf{0}\)) or not.</p>
 
-<p>Let us assume that the query index \(i\) is fixed.</p>
+  <h2>Regime Analysis</h2>
 
-<p><strong>Case i) Q1≈0 and K1≈0</strong></p>
+  <h3>Case i) \(Q\mathbf{1}\approx\mathbf{0}\) and \(K\mathbf{1}\approx\mathbf{0}\)</h3>
+  <p>\(\text{logit}_{mn} \approx \big((Q e_m)^{\top} K e_n\big)\). The logit in this case is solely influenced by the content similarity and the positional information is almost completely discarded leading to position-agnostic similarity scores.</p>
 
-$$
-\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j.
-$$
+  <h3>Case ii) \(Q\mathbf{1}\approx\mathbf{0}\) and \(K\mathbf{1}\) is not suppressed</h3>
+  <p>\(\text{logit}_{mn} \approx \big((Q e_m)^{\top} K e_n\big) + n \cdot \big((Q e_m)^{\top} K\mathbf{1}\big)\)</p>
+  <p>We can see that \(\text{logit}_{mn}\) is approximately linear in \(n\) with the slope being \(\big((Q e_m)^{\top} K\mathbf{1}\big)\). We can also note that \(\big((Q e_m)^{\top} K e_n\big)\) changes as the key token index \(n\) changes. This does not stop the linear drift in terms of \(n\) and moreover this is purely the position-agnostic content score that cannot adjust for the same token occurring at different token indices.</p>
+  <p>If \(\big((Q e_m)^{\top} K\mathbf{1}\big) > 0\), the logits of the key tokens that occur towards the end will likely be higher than the ones that occur at the beginning.
+  If \(\big((Q e_m)^{\top} K\mathbf{1}\big) < 0\), the logits of the key tokens that occur towards the end will likely be lower than the ones that occur at the beginning.
+  In both cases the probability distribution (softmax scores) becomes skewed towards either the tokens occurring at the start or at the end.</p>
+  <p>A sufficient condition for end-skewness is</p>
+  <div class="eq">\[
+    \big| (Q e_m)^{\top} K\mathbf{1} \big| \, \big(\max(n)-\min(n)\big) \;>\; \max_n\big((Q e_m)^{\top} K e_n\big) - \min_n\big((Q e_m)^{\top} K e_n\big).
+  \]</div>
+  <p>The sign of \( (Q e_m)^{\top} K\mathbf{1} \) determines which endpoint of the logit sequence is larger: if \( (Q e_m)^{\top} K\mathbf{1} > 0\), the logit at \(n=\max(n)\) exceeds that at \(n=\min(n)\); if \( (Q e_m)^{\top} K\mathbf{1} < 0\), the reverse.</p>
 
-<p>The logit in this case is solely influenced by the content similarity and the positional information is almost completely discarded leading to position-agnostic similarity scores.</p>
+  <h3>Case iii) \(K\mathbf{1}\approx\mathbf{0}\) and \(Q\mathbf{1}\) is not suppressed</h3>
+  <p>\(\text{logit}_{mn} \approx \big((Q e_m)^{\top} K e_n\big) + m \cdot \big((Q\mathbf{1})^{\top} K e_n\big)\)</p>
+  <p>For fixed \(m\), the second term varies with \(n\) <strong>through</strong> \(e_n\), but it does not induce a systematic drift linear in \(n\) as in Case ii. However, as \(m\) increases, the factor \(m \cdot \big((Q\mathbf{1})^{\top} K e_n\big)\) can dominate the logit across \(n\), diminishing content similarity at large \(m\).</p>
+  <p>Fix a key position \(n\). Let \(m_1 < m_2\) be two query positions.</p>
+  <p>A sufficient condition for pairwise ordering in \(m\) at this fixed \(n\) is</p>
+  <div class="eq">\[
+    \big| (Q\mathbf{1})^{\top} K e_n \big| \, \big(m_2 - m_1\big) \;>\; \big| (Q e_{m_2})^{\top} K e_n - (Q e_{m_1})^{\top} K e_n \big|.
+  \]</div>
+  <p>The sign of \( (Q\mathbf{1})^{\top} K e_n \) determines which query position has the larger logit: if \( (Q\mathbf{1})^{\top} K e_n > 0\), then \(\text{logit}_{m_2 n} > \text{logit}_{m_1 n}\); if \( (Q\mathbf{1})^{\top} K e_n < 0\), the reverse.</p>
 
-<p><strong>Case ii) Q1≈0 and K1 is not suppressed</strong></p>
+  <h3>Case iv) Neither \(Q\mathbf{1}\approx\mathbf{0}\) nor \(K\mathbf{1}\approx\mathbf{0}\)</h3>
+  <p>\(\text{logit}_{mn} = \big((Q e_m)^{\top} K e_n\big) + n \cdot \big((Q e_m)^{\top} K\mathbf{1}\big) + m \cdot \big((Q\mathbf{1})^{\top} K e_n\big) + m \cdot n \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big)\)</p>
+  <p>For a fixed query token position \(m\), as the key token index \(n\) increases the contribution of \(n \cdot \big((Q e_m)^{\top} K\mathbf{1}\big) + m \cdot n \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big)\) to the logit changes, where the direction depends on the sign of \(\big((Q e_m)^{\top} K\mathbf{1}\big) + m \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big)\).</p>
+  <p>At the same time the contribution of \(m \cdot \big((Q\mathbf{1})^{\top} K e_n\big)\) to the logit changes with key token index \(n\). This does not alleviate the linear drift issue as the content vector \(e_n\) changes based on the token's content and not its position. There is no mechanism through which \(e_n\) can systematically counteract the linear drift.</p>
+  <p>This leads to the same kind of skewed probability distribution as in Case ii). The effect is much more pronounced when both \(m\) and \(n\) increase, where the quadratic term \(m \cdot n \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big)\) (provided \(\big((Q\mathbf{1})^{\top} K\mathbf{1}\big)\) is not zero) can dominate the rest of the terms.</p>
+  <p>Thus positional effects are more likely to outweigh the semantics when the sequence gets longer. Also this design struggles to extrapolate during inference to sequences that are longer than the sequences seen typically during training.</p>
 
-$$
-\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j \;+\; j \cdot (Q e_i)^{\top} K\mathbf{1}.
-$$
+  <h2>Normalization Pitfall</h2>
+  <p>In order to avoid unbounded growth of positional information in our toy design, one might try per-sequence min-max normalization. Though this alleviates the magnitude issue, it creates an inconsistency in the representation: positional embeddings for a token occurring at position “m” (where “m” > 0) will have different representations for sequences of differing lengths.</p>
 
-<p>We can see that \(\mathrm{logit}_{ij}\) is approximately linear in \(j\) with the slope being \((Q e_i)^{\top} K\mathbf{1}\). We can also note that \((Q e_i)^{\top} K e_j\) changes as the key token index \(j\) changes. This does not stop the linear drift in terms of \(j\) and moreover this is purely the position-agnostic content score that cannot adjust for the same token occurring at different token indices.</p>
+  <h2>Learned Positional Embeddings</h2>
+  <p>So we must find a consistent, bounded, length-agnostic representation that does not hamper learning.</p>
+  <p>A solution that addresses the above issues is to learn positional embeddings just like token embeddings. An embedding for each position is initialized and learned with training. The design is not forced to scale with index (each position has its own parameter). The trained positional representations are clearly consistent: the vector for a position \(m\) is the same regardless of the sequence length. Also the learned embeddings are likely empirically bounded. However a key issue arises during test time when the sequence is longer than the sequence length the model was trained on. We simply do not have positional embeddings in this case. So in addition to being bounded and consistent we also need the positional embedding design to support extrapolation.</p>
 
-<p>If \(((Q e_i)^{\top} K\mathbf{1}) > 0\), the logits of the key tokens that occur towards the end will likely be higher than the ones that occur at the beginning.<br>
-If \(((Q e_i)^{\top} K\mathbf{1}) < 0\), the logits of the key tokens that occur towards the end will likely be lower than the ones that occur at the beginning.<br>
-In both cases the probability distribution (softmax scores) becomes skewed towards either the tokens occurring at the start or at the end.</p>
+  <h2>Sinusoidal Positional Embeddings</h2>
+  <p>Instead of a static lookup table design like the above we need a deterministic function that maps any position “m” to an element in \(\mathbb{R}^d\) where \(d\) is the embedding dimension. The ‘Attention Is All You Need’ paper provides an elegant solution with this exact property using sinusoidal functions. Since sine and cosine are bounded between \(-1\) and \(1\) they satisfy the “bounded” requirement while also being consistent and extrapolatable to any sequence length.</p>
+  <p>The equations for the sinusoidal positional embedding are as follows. The positional embedding vector for a token at position \(\text{pos}\) is \(d\)-dimensional. We can think of this vector as \(d/2\) pairs of dimensions.</p>
+  <p><em>Let \(\theta_i = 10000^{-2i/d}\) for \(i \in \{0,\ldots,d/2-1\}\).</em></p>
+  <p>For each pair \(i\) (where \(i \in [0,\ldots,d/2 - 1]\)), the corresponding dimensions \(k=2i\) and \(k=2i+1\) are calculated as:</p>
+  <p>For even dimensions (\(k=2i\)): \(\mathrm{PE}(\text{pos}, 2i) = \sin(\text{pos}\cdot \theta_i)\)</p>
+  <p>For odd dimensions (\(k=2i + 1\)): \(\mathrm{PE}(\text{pos}, 2i + 1) = \cos(\text{pos}\cdot \theta_i)\)</p>
+  <p>So the positional embedding is \([\sin(\text{pos}\cdot\theta_0), \cos(\text{pos}\cdot\theta_0), \sin(\text{pos}\cdot\theta_1), \cos(\text{pos}\cdot\theta_1), \ldots]\)</p>
+  <p>A key property emerges when we treat each successive \((\sin, \cos)\) pair in the encoding as a 2D vector. Because of the fundamental trigonometric identity, \(\sin^2 x + \cos^2 x = 1\), the magnitude of this vector is always 1. This means each successive \((\sin, \cos)\) pair in the positional encoding represents a point on the unit circle. You can imagine the full positional embedding as a configuration of \(d/2\) clock hands each on its own unit circle.</p>
+  <p>For any position \(\text{pos}+1\), the set of 2D vectors is obtained by rotating the vectors from position \(\text{pos}\). For example, the vectors for position 6 are just a rotated version of the vectors for position 5. It has to be noted that this is not a uniform rotation meaning each 2D vector is rotated by a different but fixed amount. This rotational step is largest for the initial pairs and gets progressively smaller for the pairs at the end of the vector.</p>
+  <p>This non-uniform rotation is crucial for ensuring that every position gets a unique embedding. If every vector were rotated by the same amount, the positional encoding could easily repeat itself across a long sequence leading to ambiguity. By using different rotational angles the sinusoidal design avoids exact repetition of positional vectors across multiple positions. While the non-uniform rotations reduce exact repetitions over typical lengths, very large \(|n-m|\) can yield near-collisions — embeddings that are different but very close.</p>
 
-<p>The skew becomes much more likely when the total change in the j-term across j, \(|(Q e_i)^{\top} K\mathbf{1}| \cdot (\max(j) - \min(j))\) is greater than the range of content score across j, \(\max_j (Q e_i)^{\top} K e_j - \min_j (Q e_i)^{\top} K e_j\).</p>
+  <h2>Limitations of Additive Sinusoids</h2>
+  <p>While this sinusoidal design is a significant improvement, it has two key limitations.</p>
+  <p>First, the relative information is implicit and not explicit. A key property of the PE vectors is that their pure dot product, \(\mathrm{PE}_m^{\top}\mathrm{PE}_n=\sum_k \cos(\theta_k(m-n))\), is a function of the relative offset \((m - n)\). However, because these vectors are added to the token embeddings, the model never computes this simple dot product. Instead, it sees a logit composed of four terms and the positional interaction \((Q\,\mathrm{PE}_m)^{\top}(K\,\mathrm{PE}_n)\) is not guaranteed to be a simple function of \((m - n)\). The model must learn to disentangle this mess and isolate the relative position information.</p>
+  <p>Second, the emergent relative information is direction-agnostic. The pure dot product \((\mathrm{PE}_m^{\top} \mathrm{PE}_n)\) is a sum of cosine terms, \(\sum_k \cos(\theta_k(m-n))\). This entire sum is symmetric because each underlying cos term is an even function. Let us consider a query at position \(m\): When the query at \(m\) attends to a key 3 steps in the future (at \(n = m+3\)), the offset is \(m-n = -3\). When it attends to a key 3 steps in the past (at \(n = m-3\)), the offset is \(m-n = 3\). Because \(\cos(\theta_k(-3)) = \cos(\theta_k(3))\) for every \(k\), the total sum i.e., the dot product is identical for offsets \(+3\) and \(-3\). This means the positional design itself provides no inherent signal for “before versus after”. While the model can theoretically learn this information by combining the sin and cos terms appropriately through the \(Q\) and \(K\) matrices, the directionality is not explicitly coded in the design.</p>
 
-<p><strong>Case iii) K1≈0 and Q1 is not suppressed</strong></p>
+  <h2>Rotary Positional Embedding (RoPE)</h2>
+  <p>Rotary Positional Embedding (RoPE) is a design that directly solves both of these limitations. Instead of adding a positional vector to the token embedding, RoPE applies positional information by rotating the query and key vectors themselves. RoPE views the \(d\)-dimensional query vector \((q)\) and key vector \((k)\) as a set of \(d/2\) 2D vectors. RoPE applies a non-uniform rotation using the same frequencies \(\theta_i\) as the sinusoidal design. The \(i\)-th 2D pair of the query is rotated by \(m\theta_i\), and the \(i\)-th pair of the key is rotated by \(n\theta_i\).</p>
+  <p>Since rotation is a norm-preserving operation, it adjusts the vector’s “phase” while leaving its “magnitude” completely untouched.</p>
+  <p>The advantage shows up in the attention score which is the dot product of the newly rotated vectors. The full \(d\)-dimensional dot product is the sum of the dot products from all \(d/2\) pairs. For a single 2D pair \(i\), this dot product \((q'_m)^{\top} (k'_n)\) mathematically simplifies to:</p>
+  <div class="eq">\[
+    \text{Score}_i = \underbrace{(q_x k_x + q_y k_y)}_{\text{Dot Product}} \cdot \cos((n-m)\theta_i) - \underbrace{(q_x k_y - q_y k_x)}_{\text{Determinant}} \cdot \sin((n-m)\theta_i)
+  \]</div>
+  <p>This new logit solves both of our original problems at once by decomposing the score into two parts:</p>
+  <p>A Symmetric Score: The first term, \((q_x k_x + q_y k_y)\), is the dot product of the original content vectors (a symmetric measure of alignment). It is gated by the symmetric cos term, which only cares about the magnitude of the offset (it is an even function) and not the direction.</p>
+  <p>An Asymmetric Score: The second term, \((q_x k_y - q_y k_x)\) is the 2D determinant of the original content vectors (an asymmetric measure). This is gated by the asymmetric sin term, which explicitly cares about direction (it is an odd function).</p>
+  <p>This directly fixes both the limitations:</p>
+  <p>It Explicitly Encodes Relative Offsets: The relative position \((n-m)\) is now explicitly multiplied with the content terms. We no longer have a logit that is a messy sum of 4 terms. The score is a direct gated function of the original content and relative position.</p>
+  <p>It is Direction-Aware: The formula includes the \(\sin((n-m)\theta_i)\) term. Since sin is an odd function \((\sin(-x) = -\sin(x))\), this term’s sign will flip depending on whether a token is in the past \((n-m < 0)\) or the future \((n-m > 0)\). This provides the clean “before versus after” signal that the additive sinusoidal design was missing.</p>
 
-$$
-\mathrm{logit}_{ij} \approx (Q e_i)^{\top} K e_j \;+\; i \cdot (Q\mathbf{1})^{\top} K e_j.
-$$
+  <h2>Locality</h2>
+  <p>At zero offset (\(m=n\)) the rotations cancel and the score equals \(q\!\cdot\!k\). Since each 2D pair \(i\) rotates by \((n-m)\theta_i\), for small offsets, pairs with negligible step angles contribute little, while only a small subset of pairs with larger step angles (those with larger \(\theta_i\)) provides most of the positional effect for nearby tokens. Because \(\theta_i=10000^{-2i/d}\) decreases with \(i\), these large-step pairs are few, which is why locality is largely preserved.</p>
 
-<p>For a fixed query index \(i\), the second term varies with key index \(j\) through \(e_j\) but does not create a linear drift in \(j\) as in previous case. However as \(i\) increases, the term \(i \cdot (Q\mathbf{1})^{\top} K e_j\) can dominate the logit across \(j\). This means the content similarity is more likely to be diminished when \(i\) gets larger.</p>
+  <h2>Extrapolation</h2>
+  <p>Coming to extrapolation, RoPE’s design allows it to extrapolate to longer sequences for two reasons</p>
+  <p>Relative encoding: For each 2D pair \(i\), the rotated dot product depends only on the offset \((n - m)\) through \(\cos((n-m)\theta_i)\) and \(\sin((n-m)\theta_i)\). The full score is the sum over all pairs, so attention depends on \((n - m)\) and not on absolute \(m\) or \(n\). The same rule that works at position 50 also works at 5000.</p>
+  <p>Bounded and norm-preserving: Each pair uses sin/cos which are bounded in \([-1, 1]\). Positions affect phase while preserving Euclidean norms and as a result the positional gate cannot blow up as \(\lvert n − m \rvert\) grows.</p>
 
-<p><strong>Case iv) Neither Q1≈0 nor K1≈0</strong></p>
+  <h2>Caveat</h2>
+  <p>As with additive sinusoidal embeddings, the individual sin/cos terms are periodic. While the non-uniform rotation prevents the full score from exactly repeating over integer offsets, for very large \(|n-m|\) the set of rotation angles can become very close to those for a different offset, leading to near-duplicate positional scores that can confuse the model.</p>
 
-$$
-\mathrm{logit}_{ij}
-= (Q e_i)^{\top} K e_j
-+ j \cdot (Q e_i)^{\top} K\mathbf{1}
-+ i \cdot (Q\mathbf{1})^{\top} K e_j
-+ i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}.
-$$
-
-<p>For a fixed query token position \(i\), as the key token index \(j\) increases the contribution of \(j \cdot (Q e_i)^{\top} K\mathbf{1} + i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\) to the logit changes, where the direction depends on the sign of \((Q e_i)^{\top} K\mathbf{1} + i \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\).</p>
-
-<p>At the same time the contribution of \(i \cdot (Q\mathbf{1})^{\top} K e_j\) to the logit changes with key token index \(j\). This does not alleviate the linear drift issue as the content vector \(e_j\) changes based on the token's content and not its position. There is no mechanism through which \(e_j\) can systematically counteract the linear drift.</p>
-
-<p>This leads to the same kind of skewed probability distribution as in Case ii). The effect is much more pronounced when both \(i\) and \(j\) increase, where the quadratic term \(i \, j \cdot (Q\mathbf{1})^{\top} K\mathbf{1}\) (provided \((Q\mathbf{1})^{\top} K\mathbf{1}\) is not zero) can dominate the rest of the terms.</p>
-
-<p>Thus positional effects are more likely to outweigh the semantics when the sequence gets longer. Also this design struggles to extrapolate during inference to sequences that are longer than the sequences seen typically during training. The flavor of the argument is similar to the above with the bottom line being that this design allows positional information to dominate the content similarity.</p>
+  <p class="note">© Your Name — draft for researcher/applied researcher portfolio post.</p>
 </body>
 </html>
