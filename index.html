@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Toy Positional Embedding Design, Sinusoidal PEs, and RoPE — Structured Draft</title>
+  <title>Positional Embedding Design (In Progress)</title>
   <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
   <style>
     :root { --fg: #111; --muted: #555; --rule: #e7e7e9; --bg: #fff; }
@@ -17,13 +17,153 @@
     .eq { margin: .6rem 0 1rem 0; }
     .note { color: var(--muted); font-size: .95rem; }
   </style>
+
+<style id="theme-additions">
+/* === Warm theme + dual toggle (inline + fixed) === */
+:root {
+  --bg: #fffaf6;
+  --fg: #1b1510;
+  --muted: #6f6258;
+  --rule: #eadcd0;
+  --link: #a24a17;
+  --link-visited: #7a3a14;
+  --code-bg: #f6efe9;
+  --kbd-bg: #f1e7de;
+  --accent: #e07a1f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #1c150f;
+    --fg: #f2e8df;
+    --muted: #cbbfb4;
+    --rule: #3a2c22;
+    --link: #ffb86b;
+    --link-visited: #f4a261;
+    --code-bg: #261c14;
+    --kbd-bg: #2f241b;
+    --accent: #f4a261;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c150f;
+  --fg: #f2e8df;
+  --muted: #cbbfb4;
+  --rule: #3a2c22;
+  --link: #ffb86b;
+  --link-visited: #f4a261;
+  --code-bg: #261c14;
+  --kbd-bg: #2f241b;
+  --accent: #f4a261;
+}
+html, body { background: var(--bg); color: var(--fg); }
+a { color: var(--link); }
+a:visited { color: var(--link-visited); }
+a:hover, a:focus { text-decoration: underline; }
+code, pre, kbd { background: var(--code-bg); }
+hr, .rule, h2 { border-color: var(--rule); }
+.note { color: var(--muted); }
+.mjx-chtml, .MathJax { color: inherit; }
+
+/* Inline toolbar (always visible, sticky) */
+.theme-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2147483646;
+  background: var(--bg);
+  color: var(--fg);
+  border-bottom: 1px solid var(--rule);
+  padding: .55rem .9rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+}
+.theme-toolbar .label {
+  font-size: .95rem;
+  color: var(--muted);
+}
+
+/* Buttons */
+.theme-btn {
+  appearance: none;
+  border: 1px solid var(--muted);
+  background: var(--bg);
+  color: var(--fg);
+  padding: .45rem .7rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: .95rem;
+  line-height: 1;
+}
+.theme-btn:hover { border-color: var(--fg); }
+.theme-btn:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Fixed button (top-right) */
+#theme-toggle-fixed {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 2147483647;
+  box-shadow: 0 1px 6px rgba(0,0,0,.18);
+}
+</style>
+
+
+<style id="readability-additions">
+/* Reader-friendly polish (gentle, non-invasive) */
+body { line-height: 1.68; }
+p { margin: 0 0 1rem; }
+h2 { margin-top: 2.2rem; margin-bottom: 0.8rem; font-size: 1.45rem; }
+h3 { margin-top: 1.6rem; margin-bottom: 0.5rem; font-size: 1.2rem; }
+.eq { margin: 1rem 0; }
+
+/* Print-friendly */
+@media print {
+  :root { color-scheme: light; }
+  html, body { background: #ffffff; color: #000000; }
+  #theme-toggle-fixed, .hanchor { display: none !important; }
+  a { color: #000000; text-decoration: none; }
+}
+</style>
+
+
+
+<style id="toc-style">
+.toc { max-width: 72ch; margin: 1rem auto 1.5rem; padding: .75rem 1rem; border: 1px solid var(--rule); background: var(--bg); border-radius: .75rem; }
+.toc strong { display: block; margin-bottom: .5rem; color: var(--muted); letter-spacing: .02em; }
+.toc ol { padding-left: 1.25rem; margin: 0; }
+.toc li { margin: .25rem 0; }
+.toc a { text-decoration: none; }
+.toc a:hover, .toc a:focus { text-decoration: underline; }
+</style>
+
+
 </head>
 <body>
-  <h1>Toy Positional Embedding Design, Sinusoidal PEs, and RoPE — Structured Draft</h1>
+<button id="theme-toggle-fixed" class="theme-btn" aria-pressed="false" aria-label="Toggle dark mode">🌙 Dark</button>
+<nav class="toc" aria-label="Table of Contents">
+  <strong>On this page</strong>
+  <ol>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#assumptions">Assumptions</a></li>
+    <li><a href="#toy-design-and-logit-expansion">Toy Design and Logit Expansion</a></li>
+    <li><a href="#regime-analysis">Regime Analysis</a></li>
+    <li><a href="#normalization-pitfall">Normalization Pitfall</a></li>
+    <li><a href="#learned-positional-embeddings">Learned Positional Embeddings</a></li>
+    <li><a href="#sinusoidal-positional-embeddings">Sinusoidal Positional Embeddings</a></li>
+    <li><a href="#limitations-of-additive-sinusoids">Limitations of Additive Sinusoids</a></li>
+    <li><a href="#rotary-positional-embedding-rope">Rotary Positional Embedding (RoPE)</a></li>
+    <li><a href="#rope-as-a-fourier-like-function-decomposition">RoPE as a Fourier-like Function Decomposition</a></li>
+    <li><a href="#locality">Locality</a></li>
+    <li><a href="#extrapolation">Extrapolation</a></li>
+    <li><a href="#caveat">Caveat</a></li>
+  </ol>
+</nav>
+
+  <h1>Toy Positional Embedding Design, Sinusoidal PEs, and RoPE — (In Progress)</h1>
 
   <h2>Motivation</h2>
   <p>A sentence is an ordered sequence of symbols <strong>whose order crucially determines meaning</strong>.</p>
-  <p><strong>Example:</strong> “She has a hot red pepper” vs “She has a red hot pepper.” The first describes temperature and color; the second describes spiciness. A small permutation of adjectives flips the semantics.</p>
+  <p><strong>Example:</strong> "She has a hot red pepper" vs "She has a red hot pepper." The first describes temperature and color; the second describes spiciness. A small permutation of adjectives flips the semantics.</p>
   <p>To build rich context, a model must know where each symbol sits with respect to the others and have a notion of distance—whether two tokens are adjacent or a thousand words apart. Interactions are often local (e.g., nouns and the adjectives that modify them). Correctly attributing an adjective to its noun relies on relative positions.</p>
   <p>We therefore need a mechanism that lets the model access order information for the symbols (tokens). Because these models operate on numbers, a natural approach is to represent order numerically.</p>
 
@@ -33,7 +173,7 @@
   \(q_m = Q x_m\) and \(k_n = K x_n\) are the query and key vectors respectively; \(Q, K \in \mathbb{R}^{d\times d}\) (single head for simplicity).</p>
 
   <h2>Toy Design and Logit Expansion</h2>
-  <p>Let us analyze the most naive implementation of this idea—our toy positional embedding design—where each position is given its absolute position badge \(p_m = m\mathbf{1}\)—and see why it fails. The following issues apply to both training and inference for this toy positional embedding design.</p>
+  <p>Let us analyze the most naive implementation of this idea—our <em>toy positional embedding design</em>—where each position is given its absolute position badge \(p_m = m\mathbf{1}\)—and see why it fails. The following issues apply to both training and inference for this toy positional embedding design.</p>
   <p>Using the setup above and setting \(p_m = m\mathbf{1}\), the attention logit is</p>
   <div class="eq">\[\text{logit}_{mn} = \big((Q e_m)^{\top} K e_n\big) + n \cdot \big((Q e_m)^{\top} K\mathbf{1}\big) + m \cdot \big((Q\mathbf{1})^{\top} K e_n\big) + m \cdot n \cdot \big((Q\mathbf{1})^{\top} K\mathbf{1}\big).\]</div>
   <p>The first term measures content similarity between tokens at \(m\) and \(n\) without position. The remaining terms are influenced by token positions \(m, n\).</p>
@@ -50,7 +190,7 @@
   <p>If \(\big((Q e_m)^{\top} K\mathbf{1}\big) > 0\), the logits of the key tokens that occur towards the end will likely be higher than the ones that occur at the beginning.
   If \(\big((Q e_m)^{\top} K\mathbf{1}\big) < 0\), the logits of the key tokens that occur towards the end will likely be lower than the ones that occur at the beginning.
   In both cases the probability distribution (softmax scores) becomes skewed towards either the tokens occurring at the start or at the end.</p>
-  <p>A sufficient condition for end-skewness is</p>
+  <p>A sufficient condition for <em>end-skewness</em> is</p>
   <div class="eq">\[
     \big| (Q e_m)^{\top} K\mathbf{1} \big| \, \big(\max(n)-\min(n)\big) \;>\; \max_n\big((Q e_m)^{\top} K e_n\big) - \min_n\big((Q e_m)^{\top} K e_n\big).
   \]</div>
@@ -74,14 +214,14 @@
   <p>Thus positional effects are more likely to outweigh the semantics when the sequence gets longer. Also this design struggles to extrapolate during inference to sequences that are longer than the sequences seen typically during training.</p>
 
   <h2>Normalization Pitfall</h2>
-  <p>In order to avoid unbounded growth of positional information in our toy design, one might try per-sequence min-max normalization. Though this alleviates the magnitude issue, it creates an inconsistency in the representation: positional embeddings for a token occurring at position “m” (where “m” > 0) will have different representations for sequences of differing lengths.</p>
+  <p>In order to avoid unbounded growth of positional information in our toy design, one might try per-sequence min-max normalization. Though this alleviates the magnitude issue, it creates an inconsistency in the representation: positional embeddings for a token occurring at position "m" (where "m" > 0) will have different representations for sequences of differing lengths.</p>
 
   <h2>Learned Positional Embeddings</h2>
   <p>So we must find a consistent, bounded, length-agnostic representation that does not hamper learning.</p>
   <p>A solution that addresses the above issues is to learn positional embeddings just like token embeddings. An embedding for each position is initialized and learned with training. The design is not forced to scale with index (each position has its own parameter). The trained positional representations are clearly consistent: the vector for a position \(m\) is the same regardless of the sequence length. Also the learned embeddings are likely empirically bounded. However a key issue arises during test time when the sequence is longer than the sequence length the model was trained on. We simply do not have positional embeddings in this case. So in addition to being bounded and consistent we also need the positional embedding design to support extrapolation.</p>
 
   <h2>Sinusoidal Positional Embeddings</h2>
-  <p>Instead of a static lookup table design like the above we need a deterministic function that maps any position “m” to an element in \(\mathbb{R}^d\) where \(d\) is the embedding dimension. The ‘Attention Is All You Need’ paper provides an elegant solution with this exact property using sinusoidal functions. Since sine and cosine are bounded between \(-1\) and \(1\) they satisfy the “bounded” requirement while also being consistent and extrapolatable to any sequence length.</p>
+  <p>Instead of a static lookup table design like the above we need a deterministic function that maps any position "m" to an element in \(\mathbb{R}^d\) where \(d\) is the embedding dimension. The <em>Attention Is All You Need</em> paper provides an elegant solution with this exact property using sinusoidal functions. Since sine and cosine are bounded between \(-1\) and \(1\) they satisfy the "bounded" requirement while also being consistent and extrapolatable to any sequence length.</p>
   <p>The equations for the sinusoidal positional embedding are as follows. The positional embedding vector for a token at position \(\text{pos}\) is \(d\)-dimensional. We can think of this vector as \(d/2\) pairs of dimensions.</p>
   <p><em>Let \(\theta_i = 10000^{-2i/d}\) for \(i \in \{0,\ldots,d/2-1\}\).</em></p>
   <p>For each pair \(i\) (where \(i \in [0,\ldots,d/2 - 1]\)), the corresponding dimensions \(k=2i\) and \(k=2i+1\) are calculated as:</p>
@@ -94,12 +234,12 @@
 
   <h2>Limitations of Additive Sinusoids</h2>
   <p>While this sinusoidal design is a significant improvement, it has two key limitations.</p>
-  <p>First, the relative information is implicit and not explicit. A key property of the PE vectors is that their pure dot product, \(\mathrm{PE}_m^{\top}\mathrm{PE}_n=\sum_k \cos(\theta_k(m-n))\), is a function of the relative offset \((m - n)\). However, because these vectors are added to the token embeddings, the model never computes this simple dot product. Instead, it sees a logit composed of four terms and the positional interaction \((Q\,\mathrm{PE}_m)^{\top}(K\,\mathrm{PE}_n)\) is not guaranteed to be a simple function of \((m - n)\). The model must learn to disentangle this mess and isolate the relative position information.</p>
-  <p>Second, the emergent relative information is direction-agnostic. The pure dot product \((\mathrm{PE}_m^{\top} \mathrm{PE}_n)\) is a sum of cosine terms, \(\sum_k \cos(\theta_k(m-n))\). This entire sum is symmetric because each underlying cos term is an even function. Let us consider a query at position \(m\): When the query at \(m\) attends to a key 3 steps in the future (at \(n = m+3\)), the offset is \(m-n = -3\). When it attends to a key 3 steps in the past (at \(n = m-3\)), the offset is \(m-n = 3\). Because \(\cos(\theta_k(-3)) = \cos(\theta_k(3))\) for every \(k\), the total sum i.e., the dot product is identical for offsets \(+3\) and \(-3\). This means the positional design itself provides no inherent signal for “before versus after”. While the model can theoretically learn this information by combining the sin and cos terms appropriately through the \(Q\) and \(K\) matrices, the directionality is not explicitly coded in the design.</p>
+  <p>First, the relative information is implicit and not explicit. A key property of the PE vectors is that their pure dot product, \(\mathrm{PE}_m^{\top}\mathrm{PE}_n=\sum_k \cos(\theta_k(m-n))\), is a function of the <em>relative offset</em> \((m - n)\). However, because these vectors are added to the token embeddings, the model never computes this simple dot product. Instead, it sees a logit composed of four terms and the positional interaction \((Q\,\mathrm{PE}_m)^{\top}(K\,\mathrm{PE}_n)\) is not guaranteed to be a simple function of \((m - n)\). The model must learn to disentangle this mess and isolate the relative position information.</p>
+  <p>Second, the emergent relative information is direction-agnostic. The pure dot product \((\mathrm{PE}_m^{\top} \mathrm{PE}_n)\) is a sum of cosine terms, \(\sum_k \cos(\theta_k(m-n))\). This entire sum is symmetric because each underlying cos term is an even function. Let us consider a query at position \(m\): When the query at \(m\) attends to a key 3 steps in the future (at \(n = m+3\)), the offset is \(m-n = -3\). When it attends to a key 3 steps in the past (at \(n = m-3\)), the offset is \(m-n = 3\). Because \(\cos(\theta_k(-3)) = \cos(\theta_k(3))\) for every \(k\), the total sum i.e., the dot product is identical for offsets \(+3\) and \(-3\). This means the positional design itself provides no inherent signal for <em>before versus after</em>. While the model can theoretically learn this information by combining the sin and cos terms appropriately through the \(Q\) and \(K\) matrices, the directionality is not explicitly coded in the design.</p>
 
   <h2>Rotary Positional Embedding (RoPE)</h2>
   <p>Rotary Positional Embedding (RoPE) is a design that directly solves both of these limitations. Instead of adding a positional vector to the token embedding, RoPE applies positional information by rotating the query and key vectors themselves. RoPE views the \(d\)-dimensional query vector \((q)\) and key vector \((k)\) as a set of \(d/2\) 2D vectors. RoPE applies a non-uniform rotation using the same frequencies \(\theta_i\) as the sinusoidal design. The \(i\)-th 2D pair of the query is rotated by \(m\theta_i\), and the \(i\)-th pair of the key is rotated by \(n\theta_i\).</p>
-  <p>Since rotation is a norm-preserving operation, it adjusts the vector’s “phase” while leaving its “magnitude” completely untouched.</p>
+  <p>Since rotation is a norm-preserving operation, it adjusts the vector's "phase" while leaving its "magnitude" completely untouched.</p>
   <p>The advantage shows up in the attention score which is the dot product of the newly rotated vectors. The full \(d\)-dimensional dot product is the sum of the dot products from all \(d/2\) pairs. For a single 2D pair \(i\), this dot product \((q'_m)^{\top} (k'_n)\) mathematically simplifies to:</p>
   <div class="eq">\[
     \text{Score}_i = \underbrace{(q_x k_x + q_y k_y)}_{\text{Dot Product}} \cdot \cos((n-m)\theta_i) - \underbrace{(q_x k_y - q_y k_x)}_{\text{Determinant}} \cdot \sin((n-m)\theta_i)
@@ -109,13 +249,33 @@
   <p>An Asymmetric Score: The second term, \((q_x k_y - q_y k_x)\) is the 2D determinant of the original content vectors (an asymmetric measure). This is gated by the asymmetric sin term, which explicitly cares about direction (it is an odd function).</p>
   <p>This directly fixes both the limitations:</p>
   <p>It Explicitly Encodes Relative Offsets: The relative position \((n-m)\) is now explicitly multiplied with the content terms. We no longer have a logit that is a messy sum of 4 terms. The score is a direct gated function of the original content and relative position.</p>
-  <p>It is Direction-Aware: The formula includes the \(\sin((n-m)\theta_i)\) term. Since sin is an odd function \((\sin(-x) = -\sin(x))\), this term’s sign will flip depending on whether a token is in the past \((n-m < 0)\) or the future \((n-m > 0)\). This provides the clean “before versus after” signal that the additive sinusoidal design was missing.</p>
+  <p>It is Direction-Aware: The formula includes the \(\sin((n-m)\theta_i)\) term. Since sin is an odd function \((\sin(-x) = -\sin(x))\), this term's sign will flip depending on whether a token is in the past \((n-m < 0)\) or the future \((n-m > 0)\). This provides the clean <em>before versus after</em> signal that the additive sinusoidal design was missing.</p>
 
+  <!-- BEGIN: RoPE as a Fourier-like Function Decomposition -->
+  <h2>RoPE as a Fourier-like Function Decomposition</h2>
+  <p>An alternative way to view RoPE is as a <strong>Fourier-like function decomposition of the attention logit</strong>. RoPE models similarity as a function of the relative offset \((n - m)\) and decomposes it onto a finite sinusoidal basis. This is similar to a Fourier series, but with <strong>non-harmonic</strong> frequencies \(\theta_i = 10000^{-2i/d}\), yielding a <strong>quasi-periodic similarity function over \((n-m)\)</strong> that <strong>delays exact repetition of similarity values across offsets</strong> (with possible near-collisions at very large \(|n - m|\)).</p>
+  <p>For each <strong>2D pair</strong> \(i\), take the \(i\)-th 2D components of the projected vectors \(q_m = Q x_m\) and \(k_n = K x_n\), denoted \((q_x, q_y)\) and \((k_x, k_y)\).</p>
+  <div class="eq">\[
+    A_i = q_x k_x + q_y k_y \ \text{(2D dot product)},\qquad
+    B_i = q_x k_y - q_y k_x \ \text{(2D determinant)}.
+  \]</div>
+  <p>The \(i\)-th pair's contribution is</p>
+  <div class="eq">\[
+    \text{score}_i = A_i \,\cos\!\big((n - m)\,\theta_i\big)\;-\; B_i \,\sin\!\big((n - m)\,\theta_i\big),
+  \]</div>
+  <p>and the head's logit decomposes as</p>
+  <div class="eq">\[
+    \text{logit}_{mn} = \sum_{i=0}^{\frac{d}{2}-1} \text{score}_i
+    = \sum_{i=0}^{\frac{d}{2}-1} \Big[ A_i \,\cos\!\big((n - m)\,\theta_i\big)\;-\; B_i \,\sin\!\big((n - m)\,\theta_i\big) \Big].
+  \]</div>
+  <p>The coefficients \(A_i, B_i\) are computed from the input via the projection matrices \(Q\) and \(K\): \(Q\) and \(K\) <strong>parametrize the <em>coefficient space</em></strong>, and each head performs a <strong>content-sensitive, <em>Fourier-like decomposition</em></strong> over relative offsets. Because the basis includes both <strong>even</strong> (\(\cos\)) and <strong>odd</strong> (\(\sin\)) components, the logit need not be even in \((n - m)\); the <strong>odd component</strong>, weighted by \(B_i\), <strong>flips sign</strong> when \(m\) and \(n\) are swapped, which induces <strong>directionality</strong> (<em>before versus after</em>) in the attention score.</p>
+  <!-- END: RoPE as a Fourier-like Function Decomposition -->
+  
   <h2>Locality</h2>
-  <p>At zero offset (\(m=n\)) the rotations cancel and the score equals \(q\!\cdot\!k\). Since each 2D pair \(i\) rotates by \((n-m)\theta_i\), for small offsets, pairs with negligible step angles contribute little, while only a small subset of pairs with larger step angles (those with larger \(\theta_i\)) provides most of the positional effect for nearby tokens. Because \(\theta_i=10000^{-2i/d}\) decreases with \(i\), these large-step pairs are few, which is why locality is largely preserved.</p>
+  <p>At zero offset (\(m=n\)) the rotations cancel and the score equals \(q\!\cdot\!k\). Since each 2D pair \(i\) rotates by \((n-m)\theta_i\), for small offsets, pairs with negligible step angles contribute little, while only a small subset of pairs with larger step angles (those with larger \(\theta_i\)) provides most of the positional effect for nearby tokens. Because \(\theta_i=10000^{-2i/d}\) decreases with \(i\), these large-step pairs are few, which is why <em>locality</em> is largely preserved.</p>
 
   <h2>Extrapolation</h2>
-  <p>Coming to extrapolation, RoPE’s design allows it to extrapolate to longer sequences for two reasons</p>
+  <p>Coming to extrapolation, RoPE's design allows it to extrapolate to longer sequences for two reasons</p>
   <p>Relative encoding: For each 2D pair \(i\), the rotated dot product depends only on the offset \((n - m)\) through \(\cos((n-m)\theta_i)\) and \(\sin((n-m)\theta_i)\). The full score is the sum over all pairs, so attention depends on \((n - m)\) and not on absolute \(m\) or \(n\). The same rule that works at position 50 also works at 5000.</p>
   <p>Bounded and norm-preserving: Each pair uses sin/cos which are bounded in \([-1, 1]\). Positions affect phase while preserving Euclidean norms and as a result the positional gate cannot blow up as \(\lvert n − m \rvert\) grows.</p>
 
@@ -125,5 +285,79 @@
   <!-- 
   <p class="note">© Your Name — draft for researcher/applied researcher portfolio post.</p>
   !-->
+
+<script>
+(function() {
+  const root = document.documentElement;
+  const inlineBtn = document.getElementById('theme-toggle-inline');
+  const fixedBtn  = document.getElementById('theme-toggle-fixed');
+  const buttons = [inlineBtn, fixedBtn].filter(Boolean);
+  const storageKey = 'theme';
+
+  function isDarkMode(mode) {
+    if (mode === 'dark') return true;
+    if (mode === 'light') return false;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  function apply(mode) {
+    if (mode) root.setAttribute('data-theme', mode);
+    else root.removeAttribute('data-theme');
+    const dark = isDarkMode(mode);
+    buttons.forEach(btn => {
+      if (!btn) return;
+      btn.setAttribute('aria-pressed', String(dark));
+      btn.textContent = dark ? '☀️ Light' : '🌙 Dark';
+      btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    });
+  }
+  let saved = null;
+  try { saved = localStorage.getItem(storageKey); } catch(e) {}
+  apply(saved);
+
+  buttons.forEach(btn => btn && btn.addEventListener('click', () => {
+    const current = root.getAttribute('data-theme'); // 'dark' | 'light' | null
+    let next;
+    if (current === 'dark') next = 'light';
+    else if (current === 'light') next = null; // back to auto
+    else next = 'dark';
+    apply(next);
+    try {
+      if (next) localStorage.setItem(storageKey, next);
+      else localStorage.removeItem(storageKey);
+    } catch (e) {}
+  }));
+
+  // Anchors for h2/h3
+  function slugify(s) {
+    return s.toLowerCase().trim()
+      .replace(/&amp;/g, '')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+  }
+  document.querySelectorAll('h2, h3').forEach(h => {
+    if (!h.id) h.id = slugify(h.textContent);
+    if (!h.querySelector('.hanchor')) {
+      const a = document.createElement('a');
+      a.className = 'hanchor';
+      a.href = '#' + h.id;
+      a.setAttribute('aria-label', 'Link to this section');
+      a.textContent = '#';
+      a.style.position = 'absolute';
+      a.style.left = '-1.25rem';
+      a.style.top = '50%';
+      a.style.transform = 'translateY(-50%)';
+      a.style.textDecoration = 'none';
+      a.style.color = 'var(--muted)';
+      a.style.opacity = '0';
+      h.style.position = 'relative';
+      h.addEventListener('mouseenter', () => a.style.opacity = '1');
+      h.addEventListener('mouseleave', () => a.style.opacity = '0');
+      h.appendChild(a);
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
